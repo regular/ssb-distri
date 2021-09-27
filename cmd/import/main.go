@@ -2,16 +2,11 @@ package main
 
 import (
 	"fmt"
-	"io"
-  "io/ioutil"
 	"log"
-  "sync"
 	"net/http"
 	"net/url"
 	//"os"
   "strings"
-  "golang.org/x/net/html"
-  "golang.org/x/net/html/atom"
 	"google.golang.org/protobuf/encoding/prototext"
 
 	"github.com/distr1/distri/pb"
@@ -20,19 +15,13 @@ import (
 const startURL = "https://repo.distr1.org/distri/supersilverhaze/pkg/"
 const workers = 4
 const downloaders = 4
-var client http.Client
 
-type Cache struct {
-  sync.Mutex
-  entries map[string] chan *pb.Meta
-}
-var cache Cache
+var (
+  client http.Client
+  cache *Cache
+  fetcher MetaFetcher
+)
 
-func (cache *Cache) Add(pkgname string) chan *pb.Meta {
-  ch := make(chan *pb.Meta, 1)
-  cache.entries[pkgname] = ch
-  return ch
-}
 //href pattern
 // ./accountsservice-amd64.meta.textproto
 // (contains version field)
@@ -50,15 +39,21 @@ func (cache *Cache) Add(pkgname string) chan *pb.Meta {
   */
 
 func main() {
-  cache = Cache{}
-  cache.entries = make(map[string] chan *pb.Meta)
-  
   client = http.Client{
     CheckRedirect: func(r *http.Request, via []*http.Request) error {
       r.URL.Opaque = r.URL.Path
       return nil
     },
   }
+  
+  base, err := url.Parse(startURL)
+	if err != nil { log.Fatal(err) }
+  fetcher = MetaFetcher{
+    base,
+    &client,
+  }
+
+  cache = NewCache()
 
   ch_links := make(chan string, 20)
   ch_needed := make(chan string)
@@ -87,45 +82,15 @@ func main() {
 func download(needed chan string, done chan bool) {
   for pkgname := range needed {
     fmt.Printf("downloading %v\n", pkgname)
-   
     cache.Lock()
-    if ch, ok := cache.entries[pkgname]; !ok {
-      log.Fatal("No meta data for %v", pkgname)
-    } else {
-      cache.Unlock()
-      meta := <- ch
-      metaString := prototext.Format(meta)
-      fmt.Println(metaString)
-    }
+    meta := cache.Get(pkgname)
+    cache.Unlock()
+    metaString := prototext.Format(meta)
+    fmt.Println(metaString)
   }
   done <- true
 }
 
-func makeAbsMetaUrl(pkgname string) string {
-  base, err := url.Parse(startURL)
-	if err != nil { log.Fatal(err) }
-
-  metaUrlString := fmt.Sprintf("./%v.meta.textproto", pkgname)
-  metaUrl, err := url.Parse(metaUrlString)
-	if err != nil { log.Fatal(err) }
-
-  absUrl := base.ResolveReference(metaUrl)
-  return absUrl.String()
-}
-
-func getMeta(absMetaUrl string) *pb.Meta {
-	resp, err := client.Get(absMetaUrl)
-	if err != nil { log.Fatal(err) }
-	defer resp.Body.Close()
-
-  bytes, err := ioutil.ReadAll(resp.Body)
-	if err != nil { log.Fatal(err) }
-  
-  var meta pb.Meta
-  err = prototext.Unmarshal(bytes, &meta)
-  if err != nil { log.Fatal(err) }
-  return &meta
-}
 
 func walkDeps(meta *pb.Meta, needed chan string) {
   //fmt.Printf("  SourcePkg: %v\n", *meta.SourcePkg)
@@ -133,43 +98,44 @@ func walkDeps(meta *pb.Meta, needed chan string) {
     //fmt.Printf("  - dep: %v\n", dep)
 
     cache.Lock()
-    if _, ok := cache.entries[dep]; ok {
+    if cache.Has(dep) {
       //fmt.Println("    (cached)")
       cache.Unlock()
       continue
     } 
-    metaChan := cache.Add(dep)
+    promise := cache.AddPromise(dep)
     cache.Unlock()
-    metaChan <- getMeta(makeAbsMetaUrl(dep))
+    promise <- fetcher.fetch(dep)
+
     needed <- dep
   }
 }
 
-func visit(metaUrlString string, needed chan string) {
+func getPkgnameFromUrl(metaUrlString string) string {
   metaUrl, err := url.Parse(metaUrlString) 
 	if err != nil { log.Fatal(err) }
   sliced := strings.Split(metaUrl.Path, "/")
   pkgname := sliced[len(sliced)-1]
   pkgname = strings.TrimSuffix(pkgname, ".meta.textproto")
+  return pkgname
+}
+
+func visit(metaUrlString string, needed chan string) {
+  pkgname := getPkgnameFromUrl(metaUrlString)
   //fmt.Printf("  pkgname: %v\n", pkgname)
   
   cache.Lock()
-  if _, ok := cache.entries[pkgname]; ok {
+  if cache.Has(pkgname) {
     cache.Unlock()
-    //fmt.Println("  already in cache")
+    //fmt.Println("  (cached)")
     return
   }
   // channel serves as a promise for meta
-  metaChan := cache.Add(pkgname)
+  promise := cache.AddPromise(pkgname)
   cache.Unlock()
 
-  base, err := url.Parse(startURL)
-	if err != nil { log.Fatal(err) }
-
-  absUrl := base.ResolveReference(metaUrl)
-  //fmt.Println(absUrl)
-  meta := getMeta(absUrl.String())
-  metaChan <- meta
+  meta := fetcher.fetch(pkgname)
+  promise <- meta
   
   version := *meta.Version
   //fmt.Println(version)
@@ -180,8 +146,9 @@ func visit(metaUrlString string, needed chan string) {
     latest := fmt.Sprintf("%v-%v", pkgname, version)
     fmt.Printf("  latest: %s\n", latest)
     cache.Lock()
-    cache.Add(latest) <- meta
+    promise := cache.AddPromise(latest)
     cache.Unlock()
+    promise <- meta
     needed <- latest
     walkDeps(meta, needed)
   }
@@ -198,37 +165,3 @@ func processLinks(urls chan string, done chan bool, needed chan string) {
   done <- true
 }
 
-func links(url string, c chan string) {
-  defer close(c)
-
-	resp, err := client.Get(url)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer resp.Body.Close()
-
-	//size, err := io.Copy(file, resp.Body)
-  z := html.NewTokenizer(resp.Body)
-  for {
-    next := z.Next()
-    if next == html.ErrorToken {
-      err := z.Err()
-      if err != io.EOF {
-        log.Print(err)
-      }
-      break
-    }
-    switch token := z.Token(); token.Type {
-      case html.StartTagToken: {
-        if token.DataAtom == atom.A {
-          for _, a := range token.Attr {
-            if a.Key == "href" {
-              //fmt.Print(a.Val)
-              c <- a.Val
-            }
-          }
-        }
-      }
-    }
-  }
-}

@@ -15,7 +15,7 @@ type MetaFetcher struct {
   client *http.Client
 }
 
-func (mf *MetaFetcher) fetch(pkgname string) *pb.Meta {
+func (mf *MetaFetcher) fetchMeta(pkgname string) *pb.Meta {
   metaUrlString := fmt.Sprintf("./%v.meta.textproto", pkgname)
   metaUrl, err := url.Parse(metaUrlString)
 	if err != nil { log.Fatal(err) }

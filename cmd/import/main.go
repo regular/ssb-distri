@@ -28,15 +28,6 @@ var (
 // ./accountsservice-amd64-0.6.55-12.meta.textproto
 // ./accountsservice-amd64-0.6.55-12.squashfs.zst
 
-  /*
-  fileName = "list.txt"
-	// Create blank file
-	file, err := os.Create(fileName)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
-  */
 
 func main() {
   client = http.Client{
@@ -53,6 +44,7 @@ func main() {
     &client,
   }
 
+
   cache = NewCache()
 
   ch_links := make(chan string, 20)
@@ -61,7 +53,7 @@ func main() {
   ch_done_downloaders := make(chan bool)
 
   for i:=0; i<downloaders; i++ {
-    go download(ch_needed, ch_done_downloaders)
+    go download(base, &client, ch_needed, ch_done_downloaders)
   }
 
   for i:=0; i<workers; i++ {
@@ -79,14 +71,27 @@ func main() {
 
 }
 
-func download(needed chan string, done chan bool) {
+func download(base *url.URL, client *http.Client, needed chan string, done chan bool) {
+  downloader := Downloader{
+    base,
+    client,
+  }
   for pkgname := range needed {
-    fmt.Printf("downloading %v\n", pkgname)
+    //fmt.Printf("downloading %v\n", pkgname)
     cache.Lock()
     meta := cache.Get(pkgname)
     cache.Unlock()
     metaString := prototext.Format(meta)
-    fmt.Println(metaString)
+    //fmt.Println(metaString)
+    _ = metaString
+    progress := make(chan string)
+    go func() {
+      for p := range progress {
+        fmt.Println(p)
+      }
+    }()
+    downloader.downloadFile(pkgname, "/home/regular/dev/go/src/ssb-distri/cmd/import/tmp", progress)
+
   }
   done <- true
 }
@@ -105,7 +110,7 @@ func walkDeps(meta *pb.Meta, needed chan string) {
     } 
     promise := cache.AddPromise(dep)
     cache.Unlock()
-    promise <- fetcher.fetch(dep)
+    promise <- fetcher.fetchMeta(dep)
 
     needed <- dep
   }
@@ -134,7 +139,7 @@ func visit(metaUrlString string, needed chan string) {
   promise := cache.AddPromise(pkgname)
   cache.Unlock()
 
-  meta := fetcher.fetch(pkgname)
+  meta := fetcher.fetchMeta(pkgname)
   promise <- meta
   
   version := *meta.Version

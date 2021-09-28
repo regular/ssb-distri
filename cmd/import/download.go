@@ -37,7 +37,7 @@ func (d *Downloader) downloadFile(pkgname, targetDir string, progress chan strin
   defer close(progress)
 
   if _, err := os.Stat(targetPath); err == nil {
-    fmt.Printf("%v already exists.\n", fileName)
+    //fmt.Printf("%v already exists.\n", fileName)
     return
   }
 
@@ -51,7 +51,7 @@ func (d *Downloader) downloadFile(pkgname, targetDir string, progress chan strin
   //tmpName := file.Name()
   //defer os.Remove(tmpName) // will fail if download completes
 
-  fmt.Printf("Downloading %v to %v\n", fileUrl, file.Name())
+  //fmt.Printf("Downloading %v to %v\n", fileUrl, file.Name())
 
 	resp, err := d.client.Get(fileUrl)
 	if err != nil { log.Fatal(err) }

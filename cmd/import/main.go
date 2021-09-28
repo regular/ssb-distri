@@ -44,16 +44,16 @@ func main() {
     &client,
   }
 
-
   cache = NewCache()
 
+  monitor := StatusMonitor()
   ch_links := make(chan string, 20)
   ch_needed := make(chan string)
   ch_done_workers := make(chan bool)
   ch_done_downloaders := make(chan bool)
 
   for i:=0; i<downloaders; i++ {
-    go download(base, &client, ch_needed, ch_done_downloaders)
+    go download(i, base, &client, monitor, ch_needed, ch_done_downloaders)
   }
 
   for i:=0; i<workers; i++ {
@@ -68,10 +68,11 @@ func main() {
   for i:=0; i<downloaders; i++ {
     <- ch_done_downloaders
   }
+  close(monitor)
 
 }
 
-func download(base *url.URL, client *http.Client, needed chan string, done chan bool) {
+func download(index int, base *url.URL, client *http.Client, monitor chan StatusUpdate, needed chan string, done chan bool) {
   downloader := Downloader{
     base,
     client,
@@ -87,7 +88,7 @@ func download(base *url.URL, client *http.Client, needed chan string, done chan 
     progress := make(chan string)
     go func() {
       for p := range progress {
-        fmt.Println(p)
+        monitor <- StatusUpdate{index,p}
       }
     }()
     downloader.downloadFile(pkgname, "/home/regular/dev/go/src/ssb-distri/cmd/import/tmp", progress)
@@ -149,7 +150,7 @@ func visit(metaUrlString string, needed chan string) {
     //pkgname = strings.TrimSuffix(pkgname, versionSuffix)
   } else {
     latest := fmt.Sprintf("%v-%v", pkgname, version)
-    fmt.Printf("  latest: %s\n", latest)
+    //fmt.Printf("  latest: %s\n", latest)
     cache.Lock()
     promise := cache.AddPromise(latest)
     cache.Unlock()
@@ -166,7 +167,7 @@ func processLinks(urls chan string, done chan bool, needed chan string) {
       visit(s, needed)
     }
   }
-  fmt.Println("Worker done.")
+  //fmt.Println("Worker done.")
   done <- true
 }
 

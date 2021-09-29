@@ -69,11 +69,12 @@ func main() {
 
   cache = NewCache()
 
-  monitor := StatusMonitor()
   ch_links := make(chan string, 20)
   ch_needed := make(chan string)
   ch_done_workers := make(chan bool)
   ch_done_downloaders := make(chan bool)
+  ch_quit := make(chan bool)
+  monitor := StatusMonitor(ch_quit)
 
   for i:=0; i<downloaders; i++ {
     go download(i, base, &client, monitor, ch_needed, ch_done_downloaders)
@@ -91,8 +92,8 @@ func main() {
   for i:=0; i<downloaders; i++ {
     <- ch_done_downloaders
   }
+  ch_quit <- true
   close(monitor)
-
 }
 
 func download(index int, base *url.URL, client *http.Client, monitor chan StatusUpdate, needed chan string, done chan bool) {
@@ -123,17 +124,18 @@ func download(index int, base *url.URL, client *http.Client, monitor chan Status
 }
 
 
-func walkDeps(meta *pb.Meta, needed chan string) {
+func walkDeps(pkgname string, meta *pb.Meta, needed chan string) {
   //fmt.Printf("  SourcePkg: %v\n", *meta.SourcePkg)
   for _, dep := range meta.RuntimeDep {
     //fmt.Printf("  - dep: %v\n", dep)
 
     cache.Lock()
     if cache.Has(dep) {
-      //fmt.Println("    (cached)")
+      log.Printf("    %v is cached\n", dep)
       cache.Unlock()
       continue
     } 
+    log.Printf("%v is needed as dependency of %v\n", dep, pkgname)
     promise := cache.AddPromise(dep)
     cache.Unlock()
     promise <- fetcher.fetchMeta(dep)
@@ -177,11 +179,18 @@ func visit(metaUrlString string, needed chan string) {
     latest := fmt.Sprintf("%v-%v", pkgname, version)
     //fmt.Printf("  latest: %s\n", latest)
     cache.Lock()
+    if cache.Has(latest) {
+      cache.Unlock()
+      log.Printf("latest version of %v is already being processed.\n", pkgname)
+      walkDeps(latest, meta, needed)
+      return
+    }
     promise := cache.AddPromise(latest)
     cache.Unlock()
     promise <- meta
+    log.Printf("needed: %v, because %v links to it, marking it as latest\n", latest, pkgname)
     needed <- latest
-    walkDeps(meta, needed)
+    walkDeps(latest, meta, needed)
   }
 }
 

@@ -14,13 +14,15 @@ type StatusUpdate struct {
   status string
 }
 
-func StatusMonitor() chan StatusUpdate {
+func StatusMonitor(quit chan bool) chan StatusUpdate {
   ch := make(chan StatusUpdate)
   slots := make([]*StatusUpdate, 8)
   tick := time.Tick(time.Second / 8)
   go func() {
     for {
       select {
+      case <- quit:
+        return
       case u := <- ch:
         //fmt.Println("update")
         slots[u.slot] = &u      

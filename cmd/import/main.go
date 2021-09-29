@@ -3,33 +3,56 @@ package main
 import (
 	"fmt"
 	"log"
+  "flag"
 	"net/http"
 	"net/url"
-	//"os"
+	"os"
   "strings"
 	"google.golang.org/protobuf/encoding/prototext"
 
 	"github.com/distr1/distri/pb"
 )
 
-const startURL = "https://repo.distr1.org/distri/supersilverhaze/pkg/"
-const workers = 4
-const downloaders = 4
 
 var (
+  localRepoDir string
+  startURL string = "https://repo.distr1.org/distri/supersilverhaze/pkg/"
+  workers int = 4
+  downloaders int = 4
+
   client http.Client
   cache *Cache
   fetcher MetaFetcher
 )
 
-//href pattern
-// ./accountsservice-amd64.meta.textproto
-// (contains version field)
-// ./accountsservice-amd64-0.6.55-12.meta.textproto
-// ./accountsservice-amd64-0.6.55-12.squashfs.zst
-
-
 func main() {
+  flag.StringVar(&startURL, "remote", "https://repo.distr1.org/distri/supersilverhaze/pkg/", "URL of remote distri package repository")
+  flag.IntVar(&workers, "workers", 4, "Number of parallel crawlers gathering package meta data")
+  flag.IntVar(&downloaders, "downloaders", 4, "Number of parallel downloads")
+
+  flag.Parse()
+
+  if len(flag.Args()) < 1 {
+    fmt.Println("Missing argument: path to local package repo direcotry")
+    os.Exit(1)
+  }
+  if len(flag.Args()) > 1 {
+    fmt.Println("Too many arguments")
+    os.Exit(1)
+  }
+
+  localRepoDir = flag.Args()[0]
+  
+  stat, err := os.Stat(localRepoDir)
+  if err != nil {
+    fmt.Println(err)
+    os.Exit(1)
+  }
+  if !stat.IsDir() {
+    fmt.Printf("%v is not a directory!\n", localRepoDir)
+    os.Exit(1)
+  }
+
   client = http.Client{
     CheckRedirect: func(r *http.Request, via []*http.Request) error {
       r.URL.Opaque = r.URL.Path
@@ -85,13 +108,15 @@ func download(index int, base *url.URL, client *http.Client, monitor chan Status
     metaString := prototext.Format(meta)
     //fmt.Println(metaString)
     _ = metaString
-    progress := make(chan string)
+    progress := make(chan StatusUpdate)
     go func() {
       for p := range progress {
-        monitor <- StatusUpdate{index,p}
+        p.slot = index
+        monitor <- p
       }
+      
     }()
-    downloader.downloadFile(pkgname, "/home/regular/dev/go/src/ssb-distri/cmd/import/tmp", progress)
+    downloader.downloadFile(pkgname, localRepoDir, progress)
 
   }
   done <- true

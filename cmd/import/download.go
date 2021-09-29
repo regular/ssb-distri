@@ -1,14 +1,15 @@
 package main
 
 import (
-  "net/http"
-	"net/url"
-  "path/filepath"
+  "time"
   "fmt"
   "log"
   "os"
   "io"
   "io/ioutil"
+  "net/http"
+	"net/url"
+  "path/filepath"
   "github.com/klauspost/compress/zstd"
 )
 
@@ -30,7 +31,7 @@ func (d *Downloader) urlFromPkg(pkgname string) string {
   return absUrl.String()
 }
 
-func (d *Downloader) downloadFile(pkgname, targetDir string, progress chan string) {
+func (d *Downloader) downloadFile(pkgname, targetDir string, progress chan StatusUpdate) {
   fileUrl := d.urlFromPkg(pkgname)
   fileName := d.filenameFromPkg(pkgname)
   targetPath := filepath.Join(targetDir, fileName) 
@@ -38,6 +39,11 @@ func (d *Downloader) downloadFile(pkgname, targetDir string, progress chan strin
 
   if _, err := os.Stat(targetPath); err == nil {
     //fmt.Printf("%v already exists.\n", fileName)
+    progress <- StatusUpdate{
+      start: time.Now(),
+      name: fileName,
+      status: "already exists",
+    }
     return
   }
 
@@ -61,10 +67,15 @@ func (d *Downloader) downloadFile(pkgname, targetDir string, progress chan strin
   decompress.Reset(resp.Body)
   reader := io.TeeReader(decompress, file)
   total := 0
+  start := time.Now()
   for {
     n, err := reader.Read(buffer)
     total += n
-    progress <- fmt.Sprintf("%v: %v bytes", fileName, total)
+    progress <- StatusUpdate{
+      start: start,
+      name: fileName,
+      status: fmt.Sprintf("%v bytes", total),
+    }
     if err != nil { 
       if err != io.EOF { log.Fatal(err) }
       break
@@ -75,5 +86,4 @@ func (d *Downloader) downloadFile(pkgname, targetDir string, progress chan strin
   if err != nil {
     log.Fatal(err)
   }
-
 }

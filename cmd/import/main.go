@@ -23,6 +23,7 @@ var (
   client http.Client
   cache *Cache
   fetcher MetaFetcher
+  repo Repo 
 )
 
 func main() {
@@ -52,6 +53,8 @@ func main() {
     fmt.Printf("%v is not a directory!\n", localRepoDir)
     os.Exit(1)
   }
+
+  repo = FSRepo{localRepoDir}
 
   client = http.Client{
     CheckRedirect: func(r *http.Request, via []*http.Request) error {
@@ -117,7 +120,7 @@ func download(index int, base *url.URL, client *http.Client, monitor chan Status
       }
       
     }()
-    downloader.downloadFile(pkgname, localRepoDir, progress)
+    downloader.downloadFile(pkgname, repo, progress)
 
   }
   done <- true

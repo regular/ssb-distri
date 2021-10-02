@@ -53,7 +53,7 @@ func StatusMonitor(quit chan bool) chan StatusUpdate {
 func formatName(n string) string {
   const wanted = 40
   if len(n)>wanted {
-    n = n[:wanted+1]
+    n = n[:wanted]
   } else {
     n += strings.Repeat(" ", wanted - len(n))
   }

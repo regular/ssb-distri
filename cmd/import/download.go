@@ -4,12 +4,9 @@ import (
   "time"
   "fmt"
   "log"
-  "os"
   "io"
-  "io/ioutil"
   "net/http"
 	"net/url"
-  "path/filepath"
   "github.com/klauspost/compress/zstd"
 )
 
@@ -18,12 +15,8 @@ type Downloader struct {
   client *http.Client
 }
 
-func (d *Downloader) filenameFromPkg(pkgname string) string {
-  return fmt.Sprintf("%v.squashfs", pkgname)
-}
-
 func (d *Downloader) urlFromPkg(pkgname string) string {
-  relUrlString := fmt.Sprintf("./%v.zst", d.filenameFromPkg(pkgname))
+  relUrlString := fmt.Sprintf("./%v.squashfs.zst", pkgname)
   relUrl, err := url.Parse(relUrlString)
 	if err != nil { log.Fatal(err) }
 
@@ -31,17 +24,16 @@ func (d *Downloader) urlFromPkg(pkgname string) string {
   return absUrl.String()
 }
 
-func (d *Downloader) downloadFile(pkgname, targetDir string, progress chan StatusUpdate) {
+
+func (d *Downloader) downloadFile(pkgname string, target Repo, progress chan StatusUpdate) {
   fileUrl := d.urlFromPkg(pkgname)
-  fileName := d.filenameFromPkg(pkgname)
-  targetPath := filepath.Join(targetDir, fileName) 
   defer close(progress)
 
-  if _, err := os.Stat(targetPath); err == nil {
-    log.Printf("%v already exists.\n", fileName)
+  if target.HasPackage(pkgname) {
+    log.Printf("%v already exists.\n", pkgname)
     progress <- StatusUpdate{
       start: time.Now(),
-      name: fileName,
+      name: pkgname,
       status: "already exists",
     }
     return
@@ -51,21 +43,20 @@ func (d *Downloader) downloadFile(pkgname, targetDir string, progress chan Statu
   if err != nil { log.Fatal(err) }
   defer decompress.Close()
 
-	file, err := ioutil.TempFile(targetDir, "download-*.part")
+  blob, err := target.NewBlobWriter(pkgname)
 	if err != nil { log.Fatal(err) }
-	defer file.Close()
-  //tmpName := file.Name()
-  //defer os.Remove(tmpName) // will fail if download completes
+	defer blob.Close()
 
-  log.Printf("Downloading %v to %v\n", fileUrl, file.Name())
+  log.Printf("Downloading %v to %v\n", fileUrl, blob.String())
 
 	resp, err := d.client.Get(fileUrl)
 	if err != nil { log.Fatal(err) }
 	defer resp.Body.Close()
 
-  buffer := make([]byte, 1<<14) // 16k buffer
+  //buffer := make([]byte, 1<<15) // 32k buffer
+  buffer := make([]byte, 1<<14) // 16k
   decompress.Reset(resp.Body)
-  reader := io.TeeReader(decompress, file)
+  reader := io.TeeReader(decompress, blob)
   total := 0
   start := time.Now()
   for {
@@ -73,8 +64,8 @@ func (d *Downloader) downloadFile(pkgname, targetDir string, progress chan Statu
     total += n
     progress <- StatusUpdate{
       start: start,
-      name: fileName,
-      status: fmt.Sprintf("%v bytes", total),
+      name: pkgname,
+      status: fmt.Sprintf("%10.d bytes", total),
     }
     if err != nil { 
       if err != io.EOF { log.Fatal(err) }
@@ -82,8 +73,8 @@ func (d *Downloader) downloadFile(pkgname, targetDir string, progress chan Statu
     }
   }
   //fmt.Println("Done.")
-  err = os.Rename(file.Name(), targetPath)
-  if err != nil {
-    log.Fatal(err)
-  }
+  digest, err := blob.Digest()
+  if err != nil { log.Fatal(err) }
+  err =  target.AddPackage(pkgname, digest, nil)
+  if err != nil { log.Fatal(err) }
 }

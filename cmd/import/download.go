@@ -25,7 +25,7 @@ func (d *Downloader) urlFromPkg(pkgname string) string {
 }
 
 
-func (d *Downloader) downloadFile(pkgname string, target Repo, progress chan StatusUpdate) {
+func (d *Downloader) downloadFile(pkgname string, target Repo, progress chan StatusUpdate) (digest interface{}, err error) {
   fileUrl := d.urlFromPkg(pkgname)
   defer close(progress)
 
@@ -73,8 +73,5 @@ func (d *Downloader) downloadFile(pkgname string, target Repo, progress chan Sta
     }
   }
   //fmt.Println("Done.")
-  digest, err := blob.Digest()
-  if err != nil { log.Fatal(err) }
-  err =  target.AddPackage(pkgname, digest, nil)
-  if err != nil { log.Fatal(err) }
+  return blob.Digest()
 }
